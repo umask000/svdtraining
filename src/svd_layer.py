@@ -8,9 +8,12 @@ if __name__ == '__main__':
 
 import math
 import torch
+import warnings
 
 from torch import nn
 from torch.nn import functional as F
+
+from src.utils import get_sorted_index
 
 class Conv2dSVD(nn.Conv2d):
 
@@ -34,6 +37,7 @@ class Conv2dSVD(nn.Conv2d):
                                         groups=groups,
                                         bias=bias,
                                         padding_mode=padding_mode)
+        del self.weight
 
         # Decomposition strategy
         kernel_height, kernel_width = self.kernel_size
@@ -47,14 +51,14 @@ class Conv2dSVD(nn.Conv2d):
 
         if self.decomposition_mode == 'channel':                                                                        # channel-wise decomposition
             rank = min(out_channels, in_channels * kernel_height * kernel_width)                                            # r = min(n, cwh)
-            self.left_singular_matrix = torch.nn.Parameter(torch.Tensor(out_channels, rank))                                # left singular matrix with shape n × r
-            self.right_singular_matrix = torch.nn.Parameter(torch.Tensor(in_channels * kernel_width * kernel_height, rank)) # right singular matrix with shape cwh × r
-            self.singular_value_vector = torch.nn.Parameter(torch.Tensor(rank, ))                                           # singlar value vector with shape r × 1
+            self.left_singular_matrix = nn.Parameter(torch.Tensor(out_channels, rank))                                # left singular matrix with shape n × r
+            self.right_singular_matrix = nn.Parameter(torch.Tensor(in_channels * kernel_width * kernel_height, rank)) # right singular matrix with shape cwh × r
+            self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))                                           # singlar value vector with shape r × 1
         elif self.decomposition_mode == 'spatial':                                                                      # spatio-wise decomposition
             rank = min(out_channels * kernel_width, in_channels * kernel_height)                                            # r = min(nw, ch)
-            self.left_singular_matrix = torch.nn.Parameter(torch.Tensor(out_channels * kernel_width, rank))                 # left singular matrix with shape nw × r
-            self.right_singular_matrix = torch.nn.Parameter(torch.Tensor(in_channels * kernel_height, rank))                # right singular matrix with shape ch × r
-            self.singular_value_vector = torch.nn.Parameter(torch.Tensor(rank, ))                                           # singlar value vector with shape r × 1
+            self.left_singular_matrix = nn.Parameter(torch.Tensor(out_channels * kernel_width, rank))                 # left singular matrix with shape nw × r
+            self.right_singular_matrix = nn.Parameter(torch.Tensor(in_channels * kernel_height, rank))                # right singular matrix with shape ch × r
+            self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))                                           # singlar value vector with shape r × 1
         else:
             raise Exception(f'Unknown decomposition mode: {decomposition_mode}')
 
@@ -62,6 +66,9 @@ class Conv2dSVD(nn.Conv2d):
         nn.init.kaiming_uniform_(self.left_singular_matrix, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.right_singular_matrix, a=math.sqrt(5))
         nn.init.uniform_(self.singular_value_vector, -1, 1)
+        # nn.init.kaiming_normal_(m.left_singular_matrix, mode='fan_out', nonlinearity='relu')
+        # nn.init.kaiming_normal_(m.right_singular_matrix, mode='fan_out', nonlinearity='relu')
+        # nn.init.normal_(self.singualr_value_vector, 0, 1)
 
     def forward(self, input):
         kernel_height, kernel_width = self.kernel_size
@@ -98,17 +105,22 @@ class LinearSVD(nn.Linear):
 
     def __init__(self, in_features, out_features, bias=True):
         super(LinearSVD, self).__init__(in_features, out_features, bias)
+        del self.weight
         rank = min(in_features, out_features)
-        self.left_singular_matrix = torch.nn.Parameter(torch.Tensor(out_features, rank))
-        self.right_singular_matrix = torch.nn.Parameter(torch.Tensor(in_features, rank))
-        self.singular_value_vector = torch.nn.Parameter(torch.Tensor(rank, ))
+        self.left_singular_matrix = nn.Parameter(torch.Tensor(out_features, rank))
+        self.right_singular_matrix = nn.Parameter(torch.Tensor(in_features, rank))
+        self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))
 
         # Parameter initialization
         nn.init.kaiming_uniform_(self.left_singular_matrix, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.right_singular_matrix, a=math.sqrt(5))
         nn.init.uniform_(self.singular_value_vector, -1, 1)
+        # nn.init.kaiming_normal_(m.left_singular_matrix, mode='fan_out', nonlinearity='relu')
+        # nn.init.kaiming_normal_(m.right_singular_matrix, mode='fan_out', nonlinearity='relu')
+        # nn.init.normal_(self.singualr_value_vector, 0, 1)
 
     def forward(self, input):
         weight = torch.mm(torch.mm(self.left_singular_matrix, torch.diag(self.singular_value_vector)), self.right_singular_matrix.t())
         return F.linear(input, weight, self.bias)
+
 

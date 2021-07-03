@@ -6,19 +6,46 @@ if __name__ == '__main__':
     import sys
     sys.path.append('../')
 
+import src
 import thop
 import numpy
+import torch
 import logging
 import argparse
 
 from torchsummary import summary
+
+def load_args(Config):
+    config = Config()
+    parser = config.parser
+    return parser.parse_args()
+
+def initialize_logging(filename, filemode='w'):
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s | %(filename)s | %(levelname)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        filename=filename,
+        filemode=filemode,
+    )
+    console = logging.StreamHandler()
+    console.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s | %(filename)s | %(levelname)s | %(message)s')
+    console.setFormatter(formatter)
+    logging.getLogger().addHandler(console)
+
+def get_sorted_index(array):
+    sorted_index_array = sorted(enumerate(array), key=lambda k: k[1])
+    sorted_index = [x[0] for x in sorted_index_array]
+    sorted_array = [x[1] for x in sorted_index_array]
+    return sorted_index, sorted_array
 
 def summary_detail(model, input_size, device='cuda'):
     sample_inputs = torch.Tensor(*input_size).to(device)
     flops, params = thop.profile(model, inputs=(sample_inputs, ))
     print(f'Total FLOPs: {flops}')
     print(f'Total params: {params}')
-    summary(model, input_size=input_size)
+    summary(model, input_size=input_size[1:])
 
 def conv2d_to_linear(conv2d, input_height, input_width):
     # The output dimension of convolution layer：O=\frac{W-K+2P}{S}+1
@@ -58,21 +85,36 @@ def conv2d_to_linear(conv2d, input_height, input_width):
                     linear_weight[output_index, input_index] = conv_weight[_output_channel, in_channel, _input_height - start_height, _input_width - start_width]
     return linear_weight
 
-def initialize_logging(filename, filemode='w'):
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s | %(filename)s | %(levelname)s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        filename=filename,
-        filemode=filemode,
-    )
-    console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s | %(filename)s | %(levelname)s | %(message)s')
-    console.setFormatter(formatter)
-    logging.getLogger().addHandler(console)
+def svd_layer_prune(layer, prune_by=2, threshold=1e-6, reduce_by=.5, min_rank=1):
+    current_rank = layer.singular_value_vector.shape[0]
 
-def load_args(Config):
-    config = Config()
-    parser = config.parser
-    return parser.parse_args()
+    # Determine the index remained after pruning
+    remaining_index = []
+    prune_to = current_rank
+    if prune_by is not None:
+        prune_to = max(current_rank - prune_by, min_rank)
+    elif threshold is not None:
+        for i, singular_value in enumerate(layer.singular_value_vector):
+            if abs(singular_value) <= threshold:
+                remaining_index.append(i)
+        if len(remaining_index) < min_rank:
+            warnings.warn(f'Threshold strategy leads to rank less than {min_rank}!')
+            prune_to = min_rank
+            remaining_index = []
+    elif reduce_by is not None:
+        prune_to = max(math.ceil(current_rank * reduce_by), min_rank)
+    else:
+        raise Exception('Pruning strategy is not specified!')
+
+    if not remaining_index:
+        sorted_index, _ = get_sorted_index(torch.abs(layer.singular_value_vector))
+        for i in range(rank):
+            if sorted_index[i] < prune_to:
+                remaining_index.append(i)
+
+    # Pruning
+    layer.singular_value_vector = nn.Parameter(layer.singular_value_vector[remaining_index])
+    layer.left_singular_matrix = nn.Parameter(layer.left_singular_matrix[:, remaining_index])
+    layer.right_singular_matrix = nn.Parameter(layer.right_singular_matrix[:, remaining_index])
+
+

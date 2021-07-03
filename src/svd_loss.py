@@ -43,9 +43,11 @@ class CrossEntropyLossSVD(nn.CrossEntropyLoss):
                 return torch.norm(x, 1) / torch.norm(x, 2)
             elif model == 'l1':
                 return torch.norm(x, 1)
+            elif model == 'l2':
+                return torch.norm(x, 2)
             raise Exception(f'Unknown mode: {mode}')
 
-        # Regularizer
+        # Regularizer calculation
         regularizer = torch.zeros(1, ).to(device)
         for orthogonal_param in orthogonal_params:
             regularizer += _orthogonality_regularizer(orthogonal_param) * orthogonality_regularizer_weight
