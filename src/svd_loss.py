@@ -24,8 +24,8 @@ class CrossEntropyLossSVD(nn.CrossEntropyLoss):
                 target,
                 orthogonal_params,
                 sparse_params,
-                orthogonality_regularizer_weight=1.,
-                sparsity_inducing_regularizer_weight=1.,
+                orthogonal_regularizer_weight=1.,
+                sparsity_regularizer_weight=1.,
                 device='cuda',
                 mode='lh'):
         cross_entropy_loss = F.cross_entropy(input,
@@ -34,23 +34,30 @@ class CrossEntropyLossSVD(nn.CrossEntropyLoss):
                                              ignore_index=self.ignore_index,
                                              reduction=self.reduction)
 
-        def _orthogonality_regularizer(x):
-            r = x.shape[1]
-            return torch.norm(torch.mm(x.t(), x) - torch.eye(r).to(device), p='fro') / r / r
-
-        def _sparsity_inducing_regularizer(x, mode='lh'):
-            if mode == 'lh':
-                return torch.norm(x, 1) / torch.norm(x, 2)
-            elif model == 'l1':
-                return torch.norm(x, 1)
-            elif model == 'l2':
-                return torch.norm(x, 2)
-            raise Exception(f'Unknown mode: {mode}')
-
         # Regularizer calculation
         regularizer = torch.zeros(1, ).to(device)
-        for orthogonal_param in orthogonal_params:
-            regularizer += _orthogonality_regularizer(orthogonal_param) * orthogonality_regularizer_weight
-        for sparse_param in sparse_params:
-            regularizer += _sparsity_inducing_regularizer(sparse_param) * sparsity_inducing_regularizer_weight
+
+        if not orthogonal_regularizer_weight == .0:
+
+            def _orthogonality_regularizer(x):
+                r = x.shape[1]
+                return torch.norm(torch.mm(x.t(), x) - torch.eye(r).to(device), p='fro') / r / r
+
+            for orthogonal_param in orthogonal_params:
+                regularizer += _orthogonality_regularizer(orthogonal_param) * orthogonal_regularizer_weight
+
+        if not sparsity_regularizer_weight == .0:
+
+            def _sparsity_inducing_regularizer(x, mode='lh'):
+                if mode == 'lh':
+                    return torch.norm(x, 1) / torch.norm(x, 2)
+                elif model == 'l1':
+                    return torch.norm(x, 1)
+                elif model == 'l2':
+                    return torch.norm(x, 2)
+                raise Exception(f'Unknown mode: {mode}')
+
+            for sparse_param in sparse_params:
+                regularizer += _sparsity_inducing_regularizer(sparse_param, mode=mode) * sparsity_regularizer_weight
+
         return cross_entropy_loss + regularizer

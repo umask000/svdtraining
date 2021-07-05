@@ -22,7 +22,7 @@ from src.data import load_cifar
 from src.models import svd_resnet
 from src.svd_loss import CrossEntropyLossSVD
 from src.svd_layer import Conv2dSVD, LinearSVD
-from src.utils import summary_detail, initialize_logging, load_args, svd_layer_prune
+from src.utils import save_args, summary_detail, initialize_logging, load_args, svd_layer_prune
 
 def train(args):
     if __name__ == '__main__':
@@ -41,16 +41,17 @@ def train(args):
 
     # Initialize logging
     initialize_logging(filename=f'{logging_root}{model_name}.log', filemode='w')
+    save_args(args, logging_root + model_name + '.json')
 
     # Group model parameters
     orthogonal_params = []
-    sparse_params = []
+    sparsity_params = []
     for name, parameter in model.named_parameters():
         lastname = name.split('.')[-1]
         if lastname == 'left_singular_matrix' or lastname == 'right_singular_matrix':
             orthogonal_params.append(parameter)
         elif lastname == 'singular_value_vector':
-            sparse_params.append(parameter)
+            sparsity_params.append(parameter)
 
     # Group modules
     svd_module_names = []
@@ -68,7 +69,12 @@ def train(args):
 
     # Define loss function and optimizer
     loss = CrossEntropyLossSVD()
-    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = args.optimizer([{'params': orthogonal_params, 'lr': args.orthogonal_learning_rate, 'momentum': args.orthogonal_momentum, 'weight_decay': args.orthogonal_weight_decay},
+                           {'params': sparsity_params, 'lr': args.sparsity_learning_rate, 'momentum': args.sparsity_momentum, 'weight_decay': args.sparsity_weight_decay}],
+                          lr=args.learning_rate,
+                          momentum=args.momentum,
+                          weight_decay=args.weight_decay)
+    # optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
 
     # Load dataset
     trainloader, testloader = load_cifar(root=data_root, download=False, batch_size=args.batch_size)
@@ -90,7 +96,13 @@ def train(args):
             X_train, y_train = data[0].to(device), data[1].to(device)
             optimizer.zero_grad()
             y_prob = model(X_train)
-            loss_value = loss(y_prob, y_train, orthogonal_params, sparse_params)
+            loss_value = loss(y_prob,
+                              y_train,
+                              orthogonal_params,
+                              sparsity_params,
+                              orthogonal_regularizer_weight=args.orthogonal_regularizer_weight,
+                              sparsity_regularizer_weight=args.sparsity_regularizer_weight,
+                              device=device)
             loss_value.backward()
             optimizer.step()
             total_losses += loss_value.item()
@@ -104,10 +116,34 @@ def train(args):
         epoch_end_time = time.time()
 
         # Prune
-        if args.svd_prune and ((epoch + 1) % args.svd_prune_cycle == 0):
-            for expression in svd_module_expressions:
-                svd_layer_prune(eval(expression), threshold=args.threshold, reduce_by=args.svd_prune_decay, min_rank=args.min_rank)
+        logging.info('Pruning ...')
 
+        if args.svd_prune and ((epoch + 1) % args.svd_prune_cycle == 0):
+            with torch.no_grad():
+                for expression in svd_module_expressions:
+                    svd_layer_prune(eval(expression),
+                                    prune_by=args.svd_prune_rank_each_time,
+                                    threshold=args.svd_prune_threshold,
+                                    reduce_by=args.svd_prune_decay,
+                                    min_rank=args.svd_prune_min_rank,
+                                    min_decay=args.svd_prune_min_decay)
+                orthogonal_params = []
+                sparsity_params = []
+                for name, parameter in model.named_parameters():
+                    lastname = name.split('.')[-1]
+                    if lastname == 'left_singular_matrix' or lastname == 'right_singular_matrix':
+                        orthogonal_params.append(parameter)
+                    elif lastname == 'singular_value_vector':
+                        sparsity_params.append(parameter)
+                    optimizer = args.optimizer([{'params': orthogonal_params, 'lr': args.orthogonal_learning_rate,
+                                                 'momentum': args.orthogonal_momentum,
+                                                 'weight_decay': args.orthogonal_weight_decay},
+                                                {'params': sparsity_params, 'lr': args.sparsity_learning_rate,
+                                                 'momentum': args.sparsity_momentum, 'weight_decay': args.sparsity_weight_decay}],
+                                               lr=args.learning_rate,
+                                               momentum=args.momentum,
+                                               weight_decay=args.weight_decay)
+        # Test
         logging.info('Waiting Test ...')
         model.eval()
         with torch.no_grad():
@@ -118,13 +154,18 @@ def train(args):
                 y_prob = model(X_test)
                 _, y_pred = torch.max(y_prob.data, 1)
                 total_count = y_test.size(0)
-                correct_count += (y_pred == y_train).sum()
+                correct_count += (y_pred == y_test).sum()
             test_accuracy = 100. * correct_count / total_count
-            logging.info('Saving model ...')
-            torch.save(model.state_dict(), ckpt_root + model_name + '_%03d.pth' % (epoch + 1))
             logging.info('EPOCH=%03d | Accuracy= %.3f%%, Time=%.3f' % (epoch + 1, test_accuracy, epoch_end_time - epoch_start_time))
+
+            # Save model to checkpoints
+            if (epoch + 1) % args.ckpt_cycle == 0:
+                logging.info('Saving model ...')
+                torch.save(model.state_dict(), ckpt_root + model_name + '_%03d.pth' % (epoch + 1))
 
 
 if __name__ == '__main__':
     args = load_args(ModelConfig)
+    args.orthogonal_regularizer_weight = .0
+    args.sparsity_regularizer_weight = .0
     train(args)

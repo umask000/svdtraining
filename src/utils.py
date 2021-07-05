@@ -6,19 +6,58 @@ if __name__ == '__main__':
     import sys
     sys.path.append('../')
 
-import src
+import time
 import thop
+import json
 import numpy
 import torch
 import logging
 import argparse
 
 from torchsummary import summary
+from torch import nn
 
 def load_args(Config):
     config = Config()
     parser = config.parser
     return parser.parse_args()
+
+def save_args(args, save_path=None):
+
+    class _MyEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, type):
+                return str(obj)
+            return json.JSONEncoder.default(self, obj)
+
+    if save_path is None:
+        save_path = f'../logging/config_{time.strftime("%Y%m%d%H%M%S")}.json'
+    with open(save_path, 'w') as f:
+        f.write(json.dumps(vars(args), cls=_MyEncoder))
+
+def save_checkpoint(model,
+                    save_path,
+                    optimizer=None,
+                    scheduler=None,
+                    epoch=None,
+                    iteration=None):
+    checkpoint = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
+        'epoch': epoch,
+        'iteration': iteration,
+    }
+    torch.save(checkpoint, save_path)
+
+def load_checkpoint(model, save_path, optimizer=None, scheduler=None):
+    checkpoint = torch.load(save_path)
+    model.load_state_dict(checkpoint['model'])
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    if scheduler is not None:
+        scheduler.load_state_dict(checkpoint['scheduler'])
+    return model, optimizer, checkpoint['epoch'], checkpoint['iteration']
 
 def initialize_logging(filename, filemode='w'):
     logging.basicConfig(
@@ -85,8 +124,14 @@ def conv2d_to_linear(conv2d, input_height, input_width):
                     linear_weight[output_index, input_index] = conv_weight[_output_channel, in_channel, _input_height - start_height, _input_width - start_width]
     return linear_weight
 
-def svd_layer_prune(layer, prune_by=2, threshold=1e-6, reduce_by=.5, min_rank=1):
+def svd_layer_prune(layer,
+                    prune_by=2,
+                    threshold=1e-6,
+                    reduce_by=.98,
+                    min_rank=1,
+                    min_decay=.0):
     current_rank = layer.singular_value_vector.shape[0]
+    min_rank = max(min_rank, math.ceil(current_rank * min_decay))                                                       # minimum rank reduced is determined by the maximum between ratio and absolute value
 
     # Determine the index remained after pruning
     remaining_index = []
@@ -102,13 +147,13 @@ def svd_layer_prune(layer, prune_by=2, threshold=1e-6, reduce_by=.5, min_rank=1)
             prune_to = min_rank
             remaining_index = []
     elif reduce_by is not None:
-        prune_to = max(math.ceil(current_rank * reduce_by), min_rank)
+        prune_to = max(math.floor(current_rank * reduce_by), min_rank)
     else:
         raise Exception('Pruning strategy is not specified!')
 
     if not remaining_index:
         sorted_index, _ = get_sorted_index(torch.abs(layer.singular_value_vector))
-        for i in range(rank):
+        for i in range(current_rank):
             if sorted_index[i] < prune_to:
                 remaining_index.append(i)
 
@@ -117,4 +162,7 @@ def svd_layer_prune(layer, prune_by=2, threshold=1e-6, reduce_by=.5, min_rank=1)
     layer.left_singular_matrix = nn.Parameter(layer.left_singular_matrix[:, remaining_index])
     layer.right_singular_matrix = nn.Parameter(layer.right_singular_matrix[:, remaining_index])
 
-
+if __name__ == '__main__':
+    from config import ModelConfig
+    args = load_args(ModelConfig)
+    save_args(args, )

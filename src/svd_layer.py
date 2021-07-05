@@ -27,6 +27,9 @@ class Conv2dSVD(nn.Conv2d):
                  groups=1,
                  bias=True,
                  padding_mode='zeros',
+                 prune_by=0,
+                 min_rank=1,
+                 min_decay=.0,
                  decomposition_mode=None):
         super(Conv2dSVD, self).__init__(in_channels=in_channels,
                                         out_channels=out_channels,
@@ -38,7 +41,6 @@ class Conv2dSVD(nn.Conv2d):
                                         bias=bias,
                                         padding_mode=padding_mode)
         del self.weight
-
         # Decomposition strategy
         kernel_height, kernel_width = self.kernel_size
 
@@ -50,15 +52,17 @@ class Conv2dSVD(nn.Conv2d):
             self.decomposition_mode = decomposition_mode
 
         if self.decomposition_mode == 'channel':                                                                        # channel-wise decomposition
-            rank = min(out_channels, in_channels * kernel_height * kernel_width)                                            # r = min(n, cwh)
-            self.left_singular_matrix = nn.Parameter(torch.Tensor(out_channels, rank))                                # left singular matrix with shape n × r
-            self.right_singular_matrix = nn.Parameter(torch.Tensor(in_channels * kernel_width * kernel_height, rank)) # right singular matrix with shape cwh × r
-            self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))                                           # singlar value vector with shape r × 1
+            rank = min(out_channels, in_channels * kernel_height * kernel_width)                                        # r = min(n, cwh)
+            rank = max(min_rank, math.ceil(rank * min_decay), rank - prune_by)                                          # rank reduction
+            self.left_singular_matrix = nn.Parameter(torch.Tensor(out_channels, rank))                                  # left singular matrix with shape n × r
+            self.right_singular_matrix = nn.Parameter(torch.Tensor(in_channels * kernel_width * kernel_height, rank))   # right singular matrix with shape cwh × r
+            self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))                                             # singlar value vector with shape r × 1
         elif self.decomposition_mode == 'spatial':                                                                      # spatio-wise decomposition
-            rank = min(out_channels * kernel_width, in_channels * kernel_height)                                            # r = min(nw, ch)
-            self.left_singular_matrix = nn.Parameter(torch.Tensor(out_channels * kernel_width, rank))                 # left singular matrix with shape nw × r
-            self.right_singular_matrix = nn.Parameter(torch.Tensor(in_channels * kernel_height, rank))                # right singular matrix with shape ch × r
-            self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))                                           # singlar value vector with shape r × 1
+            rank = min(out_channels * kernel_width, in_channels * kernel_height)                                        # r = min(nw, ch)
+            rank = max(min_rank, math.ceil(rank * min_decay), rank - prune_by)                                          # rank reduction
+            self.left_singular_matrix = nn.Parameter(torch.Tensor(out_channels * kernel_width, rank))                   # left singular matrix with shape nw × r
+            self.right_singular_matrix = nn.Parameter(torch.Tensor(in_channels * kernel_height, rank))                  # right singular matrix with shape ch × r
+            self.singular_value_vector = nn.Parameter(torch.Tensor(rank, ))                                             # singlar value vector with shape r × 1
         else:
             raise Exception(f'Unknown decomposition mode: {decomposition_mode}')
 
