@@ -7,6 +7,7 @@ if __name__ == '__main__':
     import sys
     sys.path.append('../../')
 
+import math
 import torch
 
 from torch import nn

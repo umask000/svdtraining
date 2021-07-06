@@ -46,12 +46,15 @@ def train(args):
     # Group model parameters
     orthogonal_params = []
     sparsity_params = []
+    other_params = []
     for name, parameter in model.named_parameters():
         lastname = name.split('.')[-1]
         if lastname == 'left_singular_matrix' or lastname == 'right_singular_matrix':
             orthogonal_params.append(parameter)
         elif lastname == 'singular_value_vector':
             sparsity_params.append(parameter)
+        else:
+            other_params.append(parameter)
 
     # Group modules
     svd_module_names = []
@@ -69,11 +72,21 @@ def train(args):
 
     # Define loss function and optimizer
     loss = CrossEntropyLossSVD()
-    optimizer = args.optimizer([{'params': orthogonal_params, 'lr': args.orthogonal_learning_rate, 'momentum': args.orthogonal_momentum, 'weight_decay': args.orthogonal_weight_decay},
-                           {'params': sparsity_params, 'lr': args.sparsity_learning_rate, 'momentum': args.sparsity_momentum, 'weight_decay': args.sparsity_weight_decay}],
-                          lr=args.learning_rate,
-                          momentum=args.momentum,
-                          weight_decay=args.weight_decay)
+    optimizer = args.optimizer([{'params': orthogonal_params,
+                                 'lr': args.orthogonal_learning_rate,
+                                 'momentum': args.orthogonal_momentum,
+                                 'weight_decay': args.orthogonal_weight_decay},
+                                {'params': sparsity_params,
+                                 'lr': args.sparsity_learning_rate,
+                                 'momentum': args.sparsity_momentum,
+                                 'weight_decay': args.sparsity_weight_decay},
+                                {'params': other_params,
+                                 'lr': args.learning_rate,
+                                 'momentum': args.momentum,
+                                 'weight_decay': args.weight_decay}],
+                               lr=args.learning_rate,
+                               momentum=args.momentum,
+                               weight_decay=args.weight_decay)
     # optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
 
     # Load dataset
@@ -112,7 +125,8 @@ def train(args):
             train_accuracy = 100. * correct_count / total_count
             logging.debug('[Epoch:%d, Iteration:%d] Loss: %.03f | Train accuarcy: %.3f%%' % (epoch + 1,
                                                                                              i + 1 + epoch * num_batches,
-                                                                                             total_losses / (i + 1),                                                                           train_accuracy))
+                                                                                             total_losses / (i + 1),
+                                                                                             train_accuracy))
         epoch_end_time = time.time()
 
         # Prune
@@ -129,17 +143,27 @@ def train(args):
                                     min_decay=args.svd_prune_min_decay)
                 orthogonal_params = []
                 sparsity_params = []
+                other_params = []
                 for name, parameter in model.named_parameters():
                     lastname = name.split('.')[-1]
                     if lastname == 'left_singular_matrix' or lastname == 'right_singular_matrix':
                         orthogonal_params.append(parameter)
                     elif lastname == 'singular_value_vector':
                         sparsity_params.append(parameter)
-                    optimizer = args.optimizer([{'params': orthogonal_params, 'lr': args.orthogonal_learning_rate,
+                    else:
+                        other_params.append(parameter)
+                    optimizer = args.optimizer([{'params': orthogonal_params,
+                                                 'lr': args.orthogonal_learning_rate,
                                                  'momentum': args.orthogonal_momentum,
                                                  'weight_decay': args.orthogonal_weight_decay},
-                                                {'params': sparsity_params, 'lr': args.sparsity_learning_rate,
-                                                 'momentum': args.sparsity_momentum, 'weight_decay': args.sparsity_weight_decay}],
+                                                {'params': sparsity_params,
+                                                 'lr': args.sparsity_learning_rate,
+                                                 'momentum': args.sparsity_momentum,
+                                                 'weight_decay': args.sparsity_weight_decay},
+                                                {'params': other_params,
+                                                 'lr': args.learning_rate,
+                                                 'momentum': args.momentum,
+                                                 'weight_decay': args.weight_decay}],
                                                lr=args.learning_rate,
                                                momentum=args.momentum,
                                                weight_decay=args.weight_decay)
@@ -153,10 +177,10 @@ def train(args):
                 X_test, y_test = data[0].to(device), data[1].to(device)
                 y_prob = model(X_test)
                 _, y_pred = torch.max(y_prob.data, 1)
-                total_count = y_test.size(0)
+                total_count += y_test.size(0)
                 correct_count += (y_pred == y_test).sum()
             test_accuracy = 100. * correct_count / total_count
-            logging.info('EPOCH=%03d | Accuracy= %.3f%%, Time=%.3f' % (epoch + 1, test_accuracy, epoch_end_time - epoch_start_time))
+            logging.info('EPOCH=%03d | Accuracy=%.3f%%, Time=%.3f' % (epoch + 1, test_accuracy, epoch_end_time - epoch_start_time))
 
             # Save model to checkpoints
             if (epoch + 1) % args.ckpt_cycle == 0:
@@ -166,6 +190,6 @@ def train(args):
 
 if __name__ == '__main__':
     args = load_args(ModelConfig)
-    args.orthogonal_regularizer_weight = .0
-    args.sparsity_regularizer_weight = .0
+    args.orthogonal_regularizer_weight = 1.
+    args.sparsity_regularizer_weight = 1.
     train(args)

@@ -33,8 +33,7 @@ class ModelConfig:
     parser.add_argument('--svd_prune_min_decay', default=.1, type=int)
 
 if __name__ == "__main__":
-    hyperparameters = HyperParameters()
-    parser = hyperparameters.parser
-    hp = parser.parse_args()
-    print(hp)
-
+    config= ModelConfig()
+    parser = config.parser
+    args= parser.parse_args()
+    print(args)

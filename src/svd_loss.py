@@ -23,7 +23,7 @@ class CrossEntropyLossSVD(nn.CrossEntropyLoss):
                 input,
                 target,
                 orthogonal_params,
-                sparse_params,
+                sparsity_params,
                 orthogonal_regularizer_weight=1.,
                 sparsity_regularizer_weight=1.,
                 device='cuda',
@@ -57,7 +57,7 @@ class CrossEntropyLossSVD(nn.CrossEntropyLoss):
                     return torch.norm(x, 2)
                 raise Exception(f'Unknown mode: {mode}')
 
-            for sparse_param in sparse_params:
-                regularizer += _sparsity_inducing_regularizer(sparse_param, mode=mode) * sparsity_regularizer_weight
+            for sparsity_param in sparsity_params:
+                regularizer += _sparsity_inducing_regularizer(sparsity_param, mode=mode) * sparsity_regularizer_weight
 
         return cross_entropy_loss + regularizer

@@ -7,15 +7,18 @@ if __name__ == '__main__':
     sys.path.append('../')
 
 import time
+import math
 import thop
 import json
 import numpy
 import torch
+import pandas
 import logging
 import argparse
 
-from torchsummary import summary
 from torch import nn
+from torchsummary import summary
+from matplotlib import pyplot as plt
 
 def load_args(Config):
     config = Config()
@@ -162,7 +165,96 @@ def svd_layer_prune(layer,
     layer.left_singular_matrix = nn.Parameter(layer.left_singular_matrix[:, remaining_index])
     layer.right_singular_matrix = nn.Parameter(layer.right_singular_matrix[:, remaining_index])
 
+
+def plot_logging(logging_path, export_path=None):
+
+    if export_path is None:
+        export_path = '../'
+
+    def _parse_debug_message(x):
+        x = x.replace(' ', '')
+        message_1 = x[x.find('[') + 1: x.find(']')]
+        epoch_message, iteration_message = message_1.split(',')
+        epoch = int(epoch_message[epoch_message.find(':') + 1: ])
+        iteration = int(iteration_message[iteration_message.find(':') + 1: ])
+        loss = float(x[x.find('Loss:') + 5: ])
+        return (epoch, iteration, loss)
+
+    def _parse_debug_accuracy(x):
+        x = x.replace(' ', '')
+        accuracy = float(x[x.find(':') + 1: -1])
+        return accuracy / 100.
+
+    def _parse_info_message(x):
+        x = x.replace(' ', '')
+        epoch = int(x[6:])
+        return epoch
+
+    def _parse_info_accuracy(x):
+        x = x.replace(' ', '')
+        accuracy_message, time_message = x.split(',')
+        accuracy = float(accuracy_message[accuracy_message.find('=') + 1: -1]) / 100
+        time_consumed = float(time_message[time_message.find('=') + 1: ])
+        return (accuracy, time_consumed)
+
+    df = pandas.read_csv(logging_path, header=None, sep='|', dtype=str)
+    df.columns = ['asctime', 'filename', 'levelname', 'message', 'accuracy']
+
+    for column in df.columns:
+        df.loc[:, column] = df[column].map(lambda x: x.strip() if x == x else x)
+
+    df_debug = df[df['levelname'] == 'DEBUG']
+    df_info = df[(df['levelname'] == 'INFO') & (df['accuracy'].notnull())]
+
+    debug_message = df_debug['message'].apply(_parse_debug_message)
+    debug_accuracy = df_debug['accuracy'].apply(_parse_debug_accuracy)
+    info_message = df_info['message'].apply(_parse_info_message)
+    info_accuracy = df_info['accuracy'].apply(_parse_info_accuracy)
+
+    df_debug.loc[:, 'epoch'] = debug_message.map(lambda x: x[0])
+    df_debug.loc[:, 'iteration'] = debug_message.map(lambda x: x[1])
+    df_debug.loc[:, 'loss'] = debug_message.map(lambda x: x[2])
+    df_debug.loc[:, 'accuracy'] = debug_accuracy
+    df_info.loc[:, 'epoch'] = info_message
+    df_info.loc[:, 'accuracy'] = info_accuracy.map(lambda x: x[0])
+    df_info.loc[:, 'time'] = info_accuracy.map(lambda x: x[1])
+
+    # df_debug[['asctime', 'epoch', 'iteration', 'loss', 'accuracy']].to_csv('debug.csv', sep='\t', header=True, index=False)
+    # df_info[['asctime', 'epoch', 'accuracy', 'time']].to_csv('info.csv', sep='\t', header=True, index=False)
+
+    plt.plot(df_info['epoch'], df_info['accuracy'])
+    plt.xlabel('epoch')
+    plt.ylabel('test accuracy')
+    plt.title('Test accuracy by epoch')
+    plt.show()
+    plt.close()
+
+    plt.plot(df_info['epoch'], df_info['time'])
+    plt.xlabel('epoch')
+    plt.ylabel('time')
+    plt.title('Epoch time')
+    plt.show()
+    plt.close()
+
+    plt.plot(df_debug['iteration'], df_debug['loss'])
+    plt.xlabel('iteration')
+    plt.ylabel('loss')
+    plt.title('loss by iteration')
+    plt.show()
+    plt.close()
+
+    plt.plot(df_debug['iteration'], df_debug['accuracy'])
+    plt.xlabel('iteration')
+    plt.ylabel('accuracy')
+    plt.title('Train accuracy by iteration')
+    plt.show()
+    plt.close()
+
+
 if __name__ == '__main__':
-    from config import ModelConfig
-    args = load_args(ModelConfig)
-    save_args(args, )
+    # from config import ModelConfig
+    # args = load_args(ModelConfig)
+    # save_args(args, )
+
+    # plot_logging('../temp/temp3/svd_resnet18.log')
+    plot_logging('../logging/svd_resnet18.log')
